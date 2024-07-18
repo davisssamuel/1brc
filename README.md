@@ -1,4 +1,4 @@
-# The One Billion Row Challenge
+# 1 Billion Row Challenge
 
 [The challenge](https://www.morling.dev/blog/one-billion-row-challenge/) is simple: given a text file containing 1 billion rows, where each row is a temperature reading from a given weather station, calculate the min, max, and mean temperatures for each weather station *as fast as possible*. I chose to tackle the challenge using Go because I wanted to make use of Goroutines.
 
