@@ -4,11 +4,11 @@
 
 # Sequential Solution
 
-Reading in a file, splitting lines, and calculating data is not incredibly complicated. However, I knew reading in the 14 GB measurements file would take awhile especially sequentially. However, I created a sequential solution so I could compare benchmarks between it and the parallel solution.  
+Reading in a file, splitting lines, and calculating data is not incredibly complicated. The hard part is making it fast. I knew reading the 14 GB measurements file sequentially or line-by-line would be slow. Nevertheless, I created a sequential solution so I could compare benchmarks between it and the parallel solution.  
 
 # Parallel Solution
 
-I knew I would be bottlenecked by reading in a file sequentially, line-by-line; I can only calculate the data as fast as I can get it from the operating system. My idea was to split the file into chunks, sending each chunk to 1 of n routines to be parsed.
+Because I can only calculate data as fast as I can get it from the operating system, my idea was to split the file into chunks, sending each chunk to 1 of n routines to be parsed.
 
 ## July 2024
 
