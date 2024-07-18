@@ -35,4 +35,4 @@ for err != io.EOF {
 }
 ```
 
-Unfortunately, this solution is slower than sequentially parsing, which is something I'm working to resolve whenever I can. Right now, sequential parsing takes approx. 3-4 min, whereas parallel parsing takes approx. 9-10 min.
+Unfortunately, this solution is slower than sequential parsing, which is something I'm working to resolve whenever I have time. Right now, sequential parsing takes approx. 3-4 min, whereas parallel parsing takes approx. 9-10 min.
