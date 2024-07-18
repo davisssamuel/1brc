@@ -1,15 +1,20 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 )
+
+type Buffer struct {
+	offset int64
+	size   int
+}
 
 type Data struct {
 	name string
@@ -28,33 +33,31 @@ type StationData struct {
 // 	stations map[string]*StationData
 // }
 
-func processChunks(chunks <-chan string, dat chan<- *Data, done chan<- bool) {
+func processChunks(file os.File, chunks <-chan *Buffer, dat chan<- *Data, done chan<- bool) {
 	for chunk := range chunks {
-		fmt.Printf("Processing chunk...\n")
-		lines := strings.Split(chunk, "\n")
+
+		buffer := make([]byte, chunk.size)
+		n, err := file.ReadAt(buffer, chunk.offset)
+		check(err)
+
+		lines := strings.Split(string(buffer[:n]), "\n")
 		lines = lines[:len(lines)-1]
 		for _, line := range lines {
-			l := strings.Split(line, ";")
-			temp, err := strconv.ParseFloat(l[1], 64)
+			s := strings.Split(line, ";")
+			name := s[0]
+			temp, err := strconv.ParseFloat(s[1], 64)
 			check(err)
-			dat <- &Data{l[0], temp}
-		}
-	}
-	done <- true
-}
 
-func proccessLine(lines <-chan string, dat chan<- *Data, done chan<- bool) {
-	for line := range lines {
-		l := strings.Split(line, ";")
-		temp, err := strconv.ParseFloat(l[1], 64)
-		check(err)
-		dat <- &Data{l[0], temp}
+			dat <- &Data{name, temp}
+		}
 	}
 	done <- true
 }
 
 func calculateData(dat <-chan *Data, result chan<- map[string]*StationData) {
 	stations := make(map[string]*StationData)
+
+	i := 1
 	for d := range dat {
 		name := d.name
 		temp := d.temp
@@ -77,6 +80,10 @@ func calculateData(dat <-chan *Data, result chan<- map[string]*StationData) {
 				num: 1,
 			}
 		}
+		if (i % 50000000) == 0 {
+			fmt.Printf("Parsed %d lines\n", i)
+		}
+		i++
 	}
 	result <- stations
 }
@@ -93,55 +100,69 @@ func main() {
 	check(err)
 	defer file.Close()
 
-	// c := Container{stations: make(map[string]*StationData)}
-	// stations := make(map[string]*StationData)
-
-	workers := 2 * runtime.GOMAXPROCS(0)
+	workers := runtime.GOMAXPROCS(0)
+	// workers := 100000
+	// workers := 3
 
 	fi, err := file.Stat()
 	check(err)
-	bufferSize := int(fi.Size()) / workers
+	fmt.Printf("%d\n", int(fi.Size()))
+	// bufferSize := int(fi.Size())
+	bufferSize := int(math.Pow(2, math.Floor(math.Log2(float64(fi.Size())/100))))
 
-	chunks := make(chan string)
-	// lines := make(chan string)
+	// bufferSize := 1_000_000_000 // 1 GB
+	// bufferSize := 500_000_000   // 0.5 GB
+	// bufferSize := 250_000_000   // 0.25 GB
+	// bufferSize := 10_000_000    // 10 MB
+
+	chunks := make(chan *Buffer)
 	dat := make(chan *Data)
 	result := make(chan map[string]*StationData)
 	done := make(chan bool)
 
 	for i := 0; i < workers; i++ {
-		go processChunks(chunks, dat, done)
+		go processChunks(*file, chunks, dat, done)
 	}
 	go calculateData(dat, result)
 
-	reader := bufio.NewReader(file)
-	for {
-		buffer := make([]byte, bufferSize)
-		n, err := reader.Read(buffer)
+	offsetStart := int64(0)
+	offsetEnd := bufferSize
+	b := make([]byte, 1)
+
+	fmt.Printf("bufferSize: %d\n", bufferSize)
+
+	for err != io.EOF {
+		_, err = file.ReadAt(b, int64(offsetEnd))
 		check(err)
-		for n > 0 && buffer[n-1] != '\n' {
-			b, err := reader.ReadByte()
+		for string(b) != "\n" {
+			offsetEnd++
+			_, err = file.ReadAt(b, int64(offsetEnd))
 			check(err)
-			buffer = append(buffer[:n], b)
-			n++
-		}
-		chunks <- string(buffer[:n])
-
-		if err == io.EOF {
-			break
 		}
 
-		// print status to console
-		fmt.Printf("Read %d bytes\n", len(buffer))
+		// for debugging
+		// chunk := make([]byte, (offsetEnd - int(offsetStart)))
+		// _, _ = file.ReadAt(chunk, offsetStart)
+		// fmt.Printf(">>> bytes %d to %d\n%s\n\n", offsetStart, offsetEnd, chunk)
+
+		chunks <- &Buffer{offset: offsetStart, size: (offsetEnd - int(offsetStart))}
+
+		offsetStart = int64(offsetEnd + 1)
+		offsetEnd += bufferSize
+
+		// time.Sleep(3 * time.Second)
 	}
 	close(chunks)
 
 	for i := 0; i < workers; i++ {
 		<-done
 	}
-	close(dat)
 	close(done)
+	close(dat)
 
 	stations := <-result
+
+	close(result)
 
 	for k, v := range stations {
 		fmt.Printf("%-30s|%6.2f|%6.2f|%6.2f|\n", k, v.min, v.max, (v.sum / float64(v.num)))
