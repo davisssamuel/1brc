@@ -107,7 +107,6 @@ func main() {
 	fi, err := file.Stat()
 	check(err)
 	fmt.Printf("%d\n", int(fi.Size()))
-	// bufferSize := int(fi.Size())
 	bufferSize := int(math.Pow(2, math.Floor(math.Log2(float64(fi.Size())/100))))
 
 	// bufferSize := 1_000_000_000 // 1 GB
