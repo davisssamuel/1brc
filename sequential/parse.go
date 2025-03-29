@@ -23,7 +23,7 @@ func check(err error) {
 }
 
 func main() {
-	file, err := os.Open("/Users/sam/Developer/1brc/small_measurements.txt")
+	file, err := os.Open("/Users/sam/Developer/1brc/measurements.txt")
 	check(err)
 	defer file.Close()
 
