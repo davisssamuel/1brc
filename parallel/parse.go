@@ -1,68 +1,51 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 )
 
-type Buffer struct {
-	offset int64
-	size   int
-}
-
-type Data struct {
-	name string
-	temp float64
-}
-
 type StationData struct {
-	min float64
-	max float64
-	sum float64
-	num int
+	min   float64
+	max   float64
+	sum   float64
+	count int
 }
 
-// type Container struct {
-// 	mu       sync.Mutex
-// 	stations map[string]*StationData
-// }
+type StationsContainer struct {
+	mu       sync.Mutex
+	stations map[string]*StationData
+}
 
-func processChunks(file os.File, chunks <-chan *Buffer, dat chan<- *Data, done chan<- bool) {
-	for chunk := range chunks {
+func ProcessChunk(filePath string, offset int64, size int64, stations *StationsContainer, wg *sync.WaitGroup) {
+	defer wg.Done()
 
-		buffer := make([]byte, chunk.size)
-		n, err := file.ReadAt(buffer, chunk.offset)
-		check(err)
-
-		lines := strings.Split(string(buffer[:n]), "\n")
-		lines = lines[:len(lines)-1]
-		for _, line := range lines {
-			s := strings.Split(line, ";")
-			name := s[0]
-			temp, err := strconv.ParseFloat(s[1], 64)
-			check(err)
-
-			dat <- &Data{name, temp}
-		}
+	file, err := os.Open(filePath)
+	if err != nil {
+		panic(err)
 	}
-	done <- true
-}
+	defer file.Close()
 
-func calculateData(dat <-chan *Data, result chan<- map[string]*StationData) {
-	stations := make(map[string]*StationData)
+	section := io.NewSectionReader(file, offset, size)
+	scanner := bufio.NewScanner(section)
+	for scanner.Scan() {
+		line := scanner.Text()
+		slice := strings.Split(line, ";")
+		name := slice[0]
+		temp, err := strconv.ParseFloat(slice[1], 64)
+		if err != nil {
+			panic(err)
+		}
 
-	i := 1
-	for d := range dat {
-		name := d.name
-		temp := d.temp
-
-		station, ok := stations[name]
+		stations.mu.Lock()
+		station, ok := stations.stations[name]
 		if ok {
 			if temp < station.min {
 				station.min = temp
@@ -71,100 +54,87 @@ func calculateData(dat <-chan *Data, result chan<- map[string]*StationData) {
 				station.max = temp
 			}
 			station.sum += temp
-			station.num++
+			station.count++
 		} else {
-			stations[name] = &StationData{
-				min: temp,
-				max: temp,
-				sum: temp,
-				num: 1,
+			stations.stations[name] = &StationData{
+				min:   temp,
+				max:   temp,
+				sum:   temp,
+				count: 1,
 			}
 		}
-		if (i % 50000000) == 0 {
-			fmt.Printf("Parsed %d lines\n", i)
-		}
-		i++
-	}
-	result <- stations
-}
-
-func check(err error) {
-	if err != nil && err != io.EOF {
-		log.Fatal(err)
+		stations.mu.Unlock()
 	}
 }
 
 func main() {
 
-	file, err := os.Open("/Users/sam/Developer/1brc/small_measurements.txt")
-	check(err)
+	filePath := "/Users/sam/Developer/1brc/measurements.txt"
+	file, err := os.Open(filePath)
+	if err != nil {
+		panic(err)
+	}
 	defer file.Close()
 
-	workers := runtime.GOMAXPROCS(0)
-	// workers := 100000
-	// workers := 3
+	// Determine the number of workers based off CPU cores
+	workers := runtime.GOMAXPROCS(0) - 1
+	var wg sync.WaitGroup
+	wg.Add(workers)
 
+	// Set buffer size based off file size and number of workers
 	fi, err := file.Stat()
-	check(err)
-	fmt.Printf("%d\n", int(fi.Size()))
-	bufferSize := int(math.Pow(2, math.Floor(math.Log2(float64(fi.Size())/100))))
-
-	// bufferSize := 1_000_000_000 // 1 GB
-	// bufferSize := 500_000_000   // 0.5 GB
-	// bufferSize := 250_000_000   // 0.25 GB
-	// bufferSize := 10_000_000    // 10 MB
-
-	chunks := make(chan *Buffer)
-	dat := make(chan *Data)
-	result := make(chan map[string]*StationData)
-	done := make(chan bool)
-
-	for i := 0; i < workers; i++ {
-		go processChunks(*file, chunks, dat, done)
+	if err != nil {
+		panic(err)
 	}
-	go calculateData(dat, result)
+	fileSize := fi.Size()
+	bufferSize := int(math.Ceil(float64(fileSize) / float64(workers)))
+	fmt.Printf("Setting buffer size to %d bytes\n", bufferSize)
 
-	offsetStart := int64(0)
-	offsetEnd := bufferSize
-	b := make([]byte, 1)
+	offset := int64(0)
+	size := int64(bufferSize)
+	s := StationsContainer{stations: make(map[string]*StationData)}
 
-	fmt.Printf("bufferSize: %d\n", bufferSize)
+	// Split file into chunks
+	for range workers {
 
-	for err != io.EOF {
-		_, err = file.ReadAt(b, int64(offsetEnd))
-		check(err)
-		for string(b) != "\n" {
-			offsetEnd++
-			_, err = file.ReadAt(b, int64(offsetEnd))
-			check(err)
+		// Check if the offsetEnd exceeds the file size
+		if offset+size > fileSize {
+			size = fileSize
+		} else {
+
+			// Increase chunk size till a newline is reached
+			b := make([]byte, 1)
+			_, err = file.ReadAt(b, offset+size)
+			if err != nil {
+				panic(err)
+			}
+			for string(b) != "\n" {
+				size++
+				_, err = file.ReadAt(b, offset+size)
+				if err != nil {
+					panic(err)
+				}
+			}
 		}
 
-		// for debugging
-		// chunk := make([]byte, (offsetEnd - int(offsetStart)))
-		// _, _ = file.ReadAt(chunk, offsetStart)
-		// fmt.Printf(">>> bytes %d to %d\n%s\n\n", offsetStart, offsetEnd, chunk)
+		// chunk := make([]byte, 50)
+		// _, err = file.ReadAt(chunk, offsetEnd-50)
+		// if err != nil {
+		// 	panic(err)
+		// }
+		// Send chunk to be processed
+		fmt.Printf("Creating worker to process %d-%d bytes...\n", offset, offset+size)
+		go ProcessChunk(filePath, offset, size, &s, &wg)
 
-		chunks <- &Buffer{offset: offsetStart, size: (offsetEnd - int(offsetStart))}
-
-		offsetStart = int64(offsetEnd + 1)
-		offsetEnd += bufferSize
-
-		// time.Sleep(3 * time.Second)
+		// Update the start of the next chunk
+		offset = int64(offset + size + 1)
+		size = int64(bufferSize)
 	}
-	close(chunks)
+	wg.Wait()
 
-	for i := 0; i < workers; i++ {
-		<-done
+	// Print results
+	for k, v := range s.stations {
+		fmt.Printf("%-30s|%6.2f|%6.2f|%6.2f|\n", k, v.min, v.max, (v.sum / float64(v.count)))
 	}
-	close(done)
-	close(dat)
-
-	stations := <-result
-
-	close(result)
-
-	for k, v := range stations {
-		fmt.Printf("%-30s|%6.2f|%6.2f|%6.2f|\n", k, v.min, v.max, (v.sum / float64(v.num)))
-	}
-	fmt.Printf("\n%d stations total\n", len(stations))
+	fmt.Printf("\n%d stations total\n", len(s.stations))
 }
