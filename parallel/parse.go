@@ -117,11 +117,6 @@ func main() {
 			}
 		}
 
-		// chunk := make([]byte, 50)
-		// _, err = file.ReadAt(chunk, offsetEnd-50)
-		// if err != nil {
-		// 	panic(err)
-		// }
 		// Send chunk to be processed
 		fmt.Printf("Creating worker to process %d-%d bytes...\n", offset, offset+size)
 		go ProcessChunk(filePath, offset, size, &s, &wg)
